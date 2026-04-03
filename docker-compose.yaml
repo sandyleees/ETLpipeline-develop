@@ -1,0 +1,116 @@
+# Airflow 공식 docker-compose 파일을 간소화한 버전
+# docker-compose 파일 형식 버전
+# 그냥 "3버전 문법으로 작성했다" 는 선언
+version: '3'
+
+# 모든 컨테이너가 공유하는 환경변수
+# x- 로 시작하는 건 "공통 설정 묶음" 이에요
+# 웹서버, 스케줄러가 똑같은 설정을 공유하거든요
+# 중복 작성 안 하려고 여기다 한번만 써두는 거예요
+# &airflow-common = 이 묶음에 이름 붙이기 (나중에 재사용)
+x-airflow-common:
+  &airflow-common # YAML 문법 # 이 블록을 "airflow-common" 이라는 이름으로 저장
+                  # & → "이 내용을 이름 붙여서 저장해" 마치 변수에 값을 할당하는 것처럼
+  # image: apache/airflow:2.8.0        # 사용할 Airflow 버전 - Docker Hub에서 받아올 이미지 이름
+                                    # 이미지 = 컨테이너 만들 때 쓰는 설계도
+  build: .              # ← image: apache/airflow:2.8.0 대신 이걸로 교체
+                        # . = 현재 폴더의 Dockerfile 사용해서 이미지 빌드
+  environment: # 컨테이너 안에서 쓸 환경변수들 
+                # Airflow한테 "DB는 여기 있고, 이 설정으로 실행해" 알려주는 것
+                # Airflow가 규칙으로 정해둔 환경변수 key -- Airflow 프로그램 실행 위해 읽어야되는 내용 설정
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor          # 실행 방식 (단일 머신)
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
+    # DB 연결 주소 (아이디:비밀번호@DB컨테이너이름/DB이름)
+    # ${} → .env 파일에서 값을 읽어옴 ----------------- ★ 민감정보 
+    AIRFLOW__CORE__LOAD_EXAMPLES: 'false'           # 예제 DAG 비활성화
+  volumes: # 내 폴더 ↔ 컨테이너 안 폴더 연결
+            # 컨테이너는 독립된 공간이라 내 파일을 못봐요
+            # volumes로 연결하면 내 파일을 컨테이너 안에서 볼 수 있어요 
+            # ./dags → 내 컴퓨터의 steam-etl-v2/dags
+            # /opt/airflow/dags → 컨테이너 안의 경로
+            # 이 둘을 연결 = 내가 dags/ 에 파일 저장하면 컨테이너도 바로 반영
+            # Bind Mount (코드 파일 - 내가 직접 수정해야 하니까) 로컬 폴더 직접 연결
+            # ./폴더명: (점으로 시작) ---- 저장 위치 : 내 로컬 폴더
+            # 주로 쓰는 용도 : 코드, DAG 파일 - 내가 직접 수정해야 하니까
+            # 내가 직접 파일 볼 수 있음
+    - ./dags:/opt/airflow/dags       # 내 dags 폴더 → 컨테이너 안으로 연결 (/opt/airflow/dags)
+    - ./tasks:/opt/airflow/tasks     # 내 tasks 폴더 → 컨테이너 안으로 연결
+    - ./data:/opt/airflow/data       # 내 data 폴더 → 컨테이너 안으로 연결
+  depends_on: # "postgres 컨테이너가 먼저 실행된 다음에 나를 실행해"
+              # DB 없이 Airflow 먼저 뜨면 에러나니까
+    - postgres                       # postgres 컨테이너 먼저 실행 후 시작
+
+services: # 실제로 실행할 컨테이너들 정의 시작
+  # 1. PostgreSQL (Airflow 실행 기록 저장용 DB) 컨테이너 설정
+  # DB 이름/아이디/비밀번호 설정
+  # postgres_data = DB 데이터를 컨테이너 꺼도 유지하기 위한 저장공간  
+  postgres: # 내가 정하는 컨테이너 이름 (바꿔도 됨) - 컨테이너끼리 통신할 때 주소로 쓰임
+    image: postgres:13
+    environment: # postgreSQL이 규칙으로 정해둔 환경변수 key -- postgreSQL 프로그램 실행 위해 읽어야되는 내용 설정
+      POSTGRES_USER: ${POSTGRES_USER}         # DB 사용자 이름
+      # ${} → .env 파일에서 값을 읽어옴 ----------------- ★ 민감정보
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}    # DB 비밀번호 
+      # → PostgreSQL 컨테이너한테 "DB 비밀번호는 .env파일에 있는 POSTGRES_PASSWORD야" 라고 알려주는 것
+      # ${} → .env 파일에서 값을 읽어옴 ----------------- ★ 민감정보
+      POSTGRES_DB: ${POSTGRES_DB}           # DB 이름
+      # ${} → .env 파일에서 값을 읽어옴 ----------------- ★ 민감정보
+    volumes:
+      - postgres_data:/var/lib/postgresql/data  # DB 데이터 영구 저장
+                 # postgres_data = DB 데이터를 컨테이너 꺼도 유지하기 위한 저장공간
+                 # PostgreSQL이 기본적으로 데이터를 저장하는 경로가 /var/lib/postgresql/data
+                 # PostgreSQL 공식 이미지가 이렇게 정해놨음
+                 # Named Volume (DB 데이터 - Docker가 알아서 관리하면 되니까)
+                 # 이름: (점 없음) --- 저장 위치 : Docker가 관리하는 공간
+                 # 주로 쓰는 용도 : DB 데이터
+                 # 내가 직접 파일 볼 수 없음 - docker가 관리 
+
+  # 2. Airflow 초기화 (최초 1회만 실행)
+  airflow-init: # 내가 정하는 컨테이너 이름 (바꿔도 됨) - 컨테이너끼리 통신할 때 주소로 쓰임
+    <<: *airflow-common # 위에서 &airflow-common 으로 이름붙인 공통 설정을 여기에 그대로 복붙
+                        # YAML 문법 # * → 저장해둔 내용 가져오기 (& 로 저장한 것)
+                        # << → 가져온 내용을 현재 블록에 펼쳐 넣기
+    # command: db init  # ← version 대신 db init으로 변경 
+                      # Airflow DB 테이블 생성 및 초기화
+                      # airflow 사용자 생성 자동화 하는 문구 추가하느라 그냥 주석으로 지움
+    # YAML의 > 문법이 줄바꿈을 공백으로 바꿔버려서 \ 가 제대로 동작X. > 대신 | 사용
+    command:
+      - bash
+      - -c
+      - |
+        airflow db init &&
+        airflow users create \
+          --username airflow \
+          --password airflow \
+          --firstname airflow \
+          --lastname airflow \
+          --role Admin \
+          --email airflow@airflow.com
+
+# webserver, scheduler는 airflow-init 완료 후 시작
+  # 3. Webserver (UI) 
+  airflow-webserver: # 내가 정하는 컨테이너 이름 (바꿔도 됨) - 컨테이너끼리 통신할 때 주소로 쓰임
+    <<: *airflow-common # 공통 설정 가져오기 # YAML 문법
+    command: webserver  # 웹서버 실행
+    ports:
+      - "8080:8080"          # 브라우저에서 localhost:8080 으로 접속 가능해짐
+                            # 8080:8080 = 내컴퓨터 8080포트 ↔ 컨테이너 8080포트 연결
+                            #  내컴퓨터:컨테이너 "내 8080번 문으로 들어오면 컨테이너 8080번 문으로 연결해줘"
+                            # 컨테이너는 독립된 공간이라 포트를 뚫어줘야 외부에서 접속할 수 있어요.
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    # airflow-init이 성공적으로 완료된 후에만 시작
+
+  # 4. Scheduler (스케줄 관리)
+  airflow-scheduler: # 내가 정하는 컨테이너 이름 (바꿔도 됨) - 컨테이너끼리 통신할 때 주소로 쓰임
+    <<: *airflow-common # 공통 설정 가져오기 # YAML 문법
+    command: scheduler  # 스케줄러 실행
+    depends_on:
+      airflow-init:
+        condition: service_completed_successfully
+    # airflow-init이 성공적으로 완료된 후에만 시작
+
+volumes:   # DB 데이터 영구 저장용 공간 선언
+           # 컨테이너를 껐다 켜도 DB 데이터가 유지됨 - 별도 저장 공간에 보관
+           # 컨테이너는 꺼지면 내부 데이터가 사라져요. Volume에 저장하면 유지돼요.
+  postgres_data:                     # DB 데이터 영구 저장용 볼륨 이름 
