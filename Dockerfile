@@ -2,16 +2,22 @@
 # Docker Hub에서 apache/airflow:2.8.0 이미지를 베이스로 가져와
 # 이 이미지 안에는 이미 Airflow가 설치되어 있음
 # 우리는 이 위에 추가 설정만 얹는 거예요
-FROM apache/airflow:2.8.0 
+# FROM apache/airflow:2.8.0 
 
-USER root
+FROM apache/airflow:3.1.5
+# 버전 업그레이드 
+
+# ============= 세상에... 이 과정은 필요가 없었다네요. 권한 문제 해결 못해줌 ===========================
+
+# USER root
 # data 폴더 생성 및 권한 설정
 # 컨테이너 안에서 명령어를 실행할 사용자를 root로 변경
 # root = 리눅스 최고 관리자 (모든 권한 있음)
 # 왜 root로 바꾸냐?
 # → 폴더 생성, 권한 변경은 관리자 권한이 필요하거든요
 # → airflow 사용자는 이런 작업 권한이 없음
-RUN mkdir -p /opt/airflow/data && chmod 777 /opt/airflow/data
+
+# RUN mkdir -p /opt/airflow/data && chmod 777 /opt/airflow/data
 # RUN = 이미지 빌드할 때 실행할 명령어
 # mkdir -p /opt/airflow/data = data 폴더 생성
 #   -p = 상위 폴더도 없으면 같이 생성
@@ -20,11 +26,13 @@ RUN mkdir -p /opt/airflow/data && chmod 777 /opt/airflow/data
 #   777 = 소유자/그룹/나머지 모두 읽기+쓰기+실행 가능
 #   → airflow 사용자도 이 폴더에 파일 쓸 수 있게 됨
 
-USER airflow
+# USER airflow
 # 다시 airflow 사용자로 변경
 # 권한 설정 끝났으니 다시 일반 사용자로 돌아옴
 # 보안상 root로 계속 실행하는 건 위험하거든요
 # → 필요한 작업만 root로 하고 바로 일반 사용자로 돌아오는 게 관례
+
+# ======================== bind mount이므로 로컬에서 chmod 써서 권한 설정으로 해결됨 ==================================
 
 # 로컬의 requirements.txt를 컨테이너 안으로 RUN 전에 먼저 복사해야 읽을 수 있음
 # 로컬 requirements.txt → 컨테이너 /opt/airflow/requirements.txt (컨테이너 안의 현재 작업 디렉토리)

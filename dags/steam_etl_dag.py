@@ -10,7 +10,8 @@ from airflow.operators.bash import BashOperator
 
 from datetime import datetime, timedelta # 날짜/시간 관련 라이브러리
 
-# DAG 기본 설정
+# DAG 기본 설정 - 딕셔너리형이라 가독성 안좋아져서 & 재사용 가능해서 위에 따로 정의
+# with DAG (...) <- 여기 들어갈거임 
 default_args = {
     'owner': 'sandy',               # DAG 소유자 이름 - Airflow UI에서 표시됨
                                     # 여러 사람이 쓸 때 누가 만든 DAG인지 구분용
@@ -23,13 +24,14 @@ default_args = {
 # DAG 정의 <- with 문법 = "이 블록 안에서만 이걸 써" (Python의 컨텍스트 매니저 문법)
 with DAG(
     dag_id='steam_etl_pipeline',    # DAG 이름 (Airflow UI에서 보이는 이름) - 중복되면 안 됨
-    default_args=default_args,      # 위에서 정의한 기본 설정 적용
+    default_args=default_args,      # 위에서 정의한 기본 설정 적용 --- 따로 빼둔거 여기에 쓸 예정이었음
     description='Steam ETL 파이프라인',  # DAG 설명 - UI에서 표시됨
-    schedule_interval='@daily',     # 실행 주기 # 매일 자동 실행 # @daily = 매일 자정 자동 실행
+    # schedule_interval='@daily',     # 실행 주기 # 매일 자동 실행 # @daily = 매일 자정 자동 실행
                                     # 다른 옵션들:
                                     # '@hourly'  = 매시간
                                     # '@weekly'  = 매주
                                     # '0 9 * * *' = 매일 오전 9시 (Cron 표현식)
+    schedule='@daily',          # ← 수정
     start_date=datetime(2024, 1, 1),    # DAG 시작일 # "2024년 1월 1일부터 스케줄 시작해"
     # 2024년 1월 1일은 특별한 이유 없고 그냥 과거 날짜면 아무 날짜나 괜찮아요.
     # 중요한 건 catchup=False 랑 같이 쓴다는 거 → 과거는 무시하고 지금부터 실행
