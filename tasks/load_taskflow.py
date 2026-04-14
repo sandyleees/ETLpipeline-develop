@@ -1,147 +1,142 @@
 from airflow.decorators import task  # @task 데코레이터
-from airflow.hooks.base import BaseHook  # Airflow UI Connection 정보 꺼내오는 도구
+# from airflow.hooks.base import BaseHook  # Airflow UI Connection 정보 꺼내오는 도구 -- phase4부터 불필요(connection 안씀)
 import pandas as pd
-import psycopg2                      # PostgreSQL 연결 라이브러리
+# import psycopg2                      # PostgreSQL 연결 라이브러리 -- phase4부터 불필요 (postgreSQL 안씀)
                                      # psycopg2 = Python에서 PostgreSQL 접속할 때 쓰는 표준 라이브러리
-
 # Python 코드  ──psycopg2──►  PostgreSQL (steam_db)
-
 # psycopg2 = Python과 PostgreSQL 사이의 통역사
 #            Python 코드를 PostgreSQL이 이해하는 방식으로 변환해줌
 
+import boto3                          # AWS S3 접근하기 위해 Python → AWS 통신을 대신해주는 라이브러리
+import os                             # .env -> docker compose 자동 읽기 -> 컨테이너 내 환경변수로 주입됨 : 운영체제 환경변수 읽기 
+                                    # => 컨테이너에 위에서 py 파일 돌아가므로 컨테이너 환경변수 읽음 (.env 파일 읽는게 아님. docker compose가 .env -> 환경변수로 바꿔준거 읽는거임)
+                                    # 코드에 키를 직접 쓰지 않기 위한 안전장치 
+from io import StringIO               # DataFrame → 문자열 변환 (파일 없이 S3 업로드) # 메모리 안에서 파일처럼 쓸 수 있는 객체
+                                    # 로컬에 CSV 파일 저장 없이
+                                    # 바로 S3에 업로드하기 위해 필요
+                                    # io = Input/Output 의 약자
+from datetime import datetime         # 날짜별 파일 이름 생성용
+
+
 @task
-def load(data):  # ← transform()의 return값(딕셔너리 리스트)을 인자로 받음
+def load(data):  # ← transform()의 return값(딕셔너리 리스트)을 인자로 받음 # XCom을 통해 자동으로 전달됨
     """
-    transform()에서 받은 정제 데이터를 steam_db에 저장하는 함수
+    transform()에서 받은 정제 데이터를 S3에 업로드하는 함수
 
     [기존 load.py와 다른 점]
-    기존 : data/clean.csv 파일을 읽어서 → data/steam_deals.csv로 저장
-    새것 : transform()의 return값을 인자로 받아서 → steam_db에 저장
-           CSV 파일 없이 DB에 직접 적재
+    기존: XCom 데이터 → steam_db에 INSERT
+    새것: XCom 데이터 → S3 버킷에 CSV 업로드
     """
 
     # DataFrame으로 변환
     # transform()이 딕셔너리 리스트로 넘겨줬으니까 다시 DataFrame으로
     df = pd.DataFrame(data)
 
-
-    # Airflow UI Admin → Connections 에 등록한 정보 가져오기
-    # 'steam_db_conn' = 우리가 UI에서 등록한 Connection ID
-    conn_info = BaseHook.get_connection('steam_db_conn')
-
-    # conn_info 안에 이런 정보가 들어있어요:
-    # conn_info.host     = "postgres"      (컨테이너 이름)
-    # conn_info.schema   = "steam_db"      (Database 필드)
-    # conn_info.login    = "postgresql"    (Login 필드)
-    # conn_info.password = "postgresql"    (Password 필드)
-    # conn_info.port     = 5432            (Port 필드)
-
-
-    # PostgreSQL 연결 설정
-    # conn = 연결 그 자체 # conn = psycopg2.connect(...)
-    # 마치 PostgreSQL 건물에 들어가는 문을 여는 것  
-    # Airflow Connection에 등록한 정보로 접속
-    # (Step 6에서 Airflow UI에 등록할 거예요 -- 아래는 하드코딩의 case)
-    # conn = psycopg2.connect(
-    #     host="postgres",       # docker-compose.yml의 postgres 컨테이너 이름
-    #                            # 컨테이너끼리는 컨테이너 이름이 곧 주소예요
-    #     database="steam_db",   # 접속할 DB 이름
-    #     user="postgresql",        # .env의 POSTGRES_USER
-    #     password="postgresql"     # .env의 POSTGRES_PASSWORD
-    #                            # ★ 나중에 .env에서 읽어오도록 개선할 거예요
-    # )
-    conn = psycopg2.connect(
-        host=conn_info.host,
-        database=conn_info.schema,   # Airflow Connection에서 Database = schema
-        user=conn_info.login,
-        password=conn_info.password,
-        port=conn_info.port
+    # S3 클라이언트 생성
+    # boto3가 .env의 환경변수를 자동으로 읽어서 인증
+    # AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY 를 os.environ에서 찾음
+    s3 = boto3.client(
+        's3',
+        aws_access_key_id=os.environ.get('AWS_ACCESS_KEY_ID'),
+        aws_secret_access_key=os.environ.get('AWS_SECRET_ACCESS_KEY'),
+        region_name=os.environ.get('AWS_REGION')
     )
-
-
-    # cursor = DB에 SQL 명령을 보내는 도구
-    # 마치 DB와 대화하는 창구 역할
-    cursor = conn.cursor()
-    # cursor = 실제로 SQL을 실행하는 도구
-    # 마치 건물 안에서 직원한테 요청하는 창구
-
-
-    # ★ dag 여러 번 실행 시 data 중복 저장 방지: INSERT 전에 기존 데이터 전부 삭제
-    # DAG을 여러 번 실행해도 항상 최신 데이터 20개만 유지됨
-    # TRUNCATE = DELETE보다 빠름 (행 하나씩 지우지 않고 테이블 통째로 초기화)
-    cursor.execute("TRUNCATE TABLE steam_deals RESTART IDENTITY")
-    # RESTART IDENTITY = id(SERIAL) 번호도 1부터 다시 시작 (PRIMARY KEY)
-    # 없으면 id가 21, 22, 23... 으로 계속 증가
-
-
-    print(f"steam_db 적재 시작: {len(df)}개")
-
-    # 행 하나씩 INSERT # DataFrame을 한 행씩 꺼내주는 pandas 메소드
-    for _, row in df.iterrows():
-    #   ↑
-    #   _ = 행 번호 (0, 1, 2 ...)
-    #       쓸 일 없으니까 _ 로 무시
+    # client = "S3랑 통신할 수 있는 객체(인스턴스)" <- 클래스 __init__ 설정값 작성해서 만들어짐
     #
-    #        row = 한 행의 데이터
-    #              row['title'], row['salePrice'] 이런 식으로 접근
+    # boto3.client('s3') = S3 전용 통신 도구 생성
+    #
+    # os.environ.get('AWS_ACCESS_KEY_ID')
+    #   → docker-compose가 .env를 읽어서
+    #     컨테이너 환경변수로 주입한 값을 꺼내옴 (.env 읽는게 아님)
+    #   → 코드에 키를 직접 안 써도 되는 이유
+    #
+    # region_name = 어느 리전의 S3인지 명시
+    #   → 서울 리전: ap-northeast-2
 
-    # iterrows()는 튜플을 하나씩 yield하는 제너레이터예요
-    # 각 튜플은 이렇게 생겼어요:
-    # (인덱스번호, Series객체)
-    # iterrows()가 매 루프마다 이걸 반환해요:
-    # _ = 인덱스 번호 (0, 1, 2 ...)
-    # row = Series 객체 (한 행의 데이터)
 
-    # 예시: df가 이렇게 생겼으면
-    # title        salePrice
-    # "게임A"      9.99
-    # "게임B"      4.99
+    # 버킷 이름 가져오기
+    bucket_name = os.environ.get('S3_BUCKET_NAME')
+    # 코드에 직접 쓰지 않고 환경변수로 관리
+    # → 버킷 이름 바뀌어도 .env만 수정하면 됨
 
-    #   (0, Series({'title': '배트맨',    'salePrice': 9.99})),
-    #   (1, Series({'title': '스파이더맨', 'salePrice': 4.99})),
-    #  ↑                ↑
-    #  인덱스번호        한 행의 데이터 (Series)
 
-    # 첫 번째 루프: row['title'] = "게임A", row['salePrice'] = 9.99
-    # 두 번째 루프: row['title'] = "게임B", row['salePrice'] = 4.99
-        # 창구에 SQL 명령 전달 # cursor.execute("SELECT ...")
-        cursor.execute("""
-            INSERT INTO steam_deals (
-                title,
-                sale_price,
-                normal_price,
-                savings,
-                metacritic_score,
-                steam_rating,
-                deal_rating,
-                release_date
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        """,
-        (
-            row['title'],
-            row['salePrice'],
-            row['normalPrice'],
-            row['savings'],
-            row['metacriticScore'],
-            row['steamRatingText'],
-            row['dealRating'],
-            row['releaseDate']
-        ))
-        # %s = SQL 인젝션 방지를 위한 플레이스홀더
-        # 값을 직접 문자열로 넣지 않고 튜플로 따로 전달하는 방식
+    # 날짜별 파일 이름 생성 # 오늘 날짜 기반 파일 이름 생성
+    # 예: deals_20260414.csv
+    today = datetime.now().strftime('%Y%m%d')
+    file_name = f'deals_{today}.csv'
+    # datetime.now() = 현재 시각
+    # .strftime('%Y%m%d') = 날짜 형식 지정
+    #   %Y = 4자리 연도 (2026)
+    #   %m = 2자리 월   (04)
+    #   %d = 2자리 일   (14)
+    # → '20260414'
+    #
+    # f'deals_{today}.csv' = 'deals_20260414.csv'
+    # DAG 매일 실행 시 날짜별로 파일이 쌓임:
+    #   deals_20260414.csv
+    #   deals_20260415.csv
+    #   deals_20260416.csv
 
-    # 변경사항 확정 (commit하지 않으면 DB에 반영 안 됨)
-    # "지금까지 한 작업 확정해줘"
-    # commit 안 하면 DB에 반영 안 됨!
-    # 마치 문서 작성하고 저장버튼 안 누른 것
-    # 트랜잭션 ACID에서 A(원자성) 과 D(지속성) 을 보장
-    conn.commit()
-    # TRUNCATE + INSERT 전부 하나의 트랜잭션으로 묶임
-    # → commit 전에 에러나면 TRUNCATE도 rollback
-    # → 데이터가 통째로 날아가는 일 없음 (ACID 원자성)
 
-    print(f"steam_db 적재 완료: {len(df)}개")
+    # DataFrame → CSV 문자열로 변환
+    # StringIO = 메모리 안에서 파일처럼 쓸 수 있는 객체
+    # 로컬에 파일 저장 없이 바로 S3에 업로드 가능
+    # 1. 빈 StringIO 객체 생성
+    # 메모리 안에 빈 공간 만들기
+    csv_buffer = StringIO()
+    # 내부 상태: ""  (비어있음)
+    # 커서 위치: 0
+    #  ↓
+    # [        ] ← 빈 메모리 공간
+    #  ↑
+    #  커서
 
-    # 연결 종료 # 창구 닫고, 건물 문 닫고 나오기
-    cursor.close()
-    conn.close()
+
+    # 2. DataFrame을 CSV 형태로 StringIO에 씀
+    df.to_csv(csv_buffer, index=False)  # index=False = 행 번호 제외
+    # 내부 상태:
+    # "title,salePrice,normalPrice\n
+    #  게임A,9.99,19.99\n
+    #  게임B,4.99,9.99\n"
+    #
+    #  [title,salePrice...\n게임A,9.99...\n게임B...]
+    #                                               ↑
+    #                                          커서가 맨 끝으로 이동
+
+    # StringIO() = 메모리 안의 빈 파일 같은 것
+    #   실제 파일처럼 읽고 쓸 수 있지만
+    #   디스크에 저장되지 않음 (메모리에만 존재)
+    #
+    # df.to_csv(csv_buffer)
+    #   = DataFrame을 CSV 형태로 csv_buffer에 씀
+    #   = 로컬 파일 저장 없이 메모리에 CSV 생성
+    #
+    # index=False
+    #   = 행 번호(0,1,2...) 제외하고 저장
+    #   없으면 CSV 첫 번째 열에 0,1,2... 숫자가 생김
+
+    print(f"S3 업로드 시작: {bucket_name}/{file_name} ({len(df)}개)")
+
+    # S3에 파일 업로드
+    s3.put_object(
+        Bucket=bucket_name,       # 어느 버킷에
+        Key=file_name,            # 파일 이름 (경로 포함 가능: 'data/deals_20260414.csv')
+        # 3. StringIO에 담긴 내용 꺼내기
+        Body=csv_buffer.getvalue(), # 업로드할 내용 (CSV 문자열) 
+        # getvalue() = 커서 위치 상관없이
+        #              전체 내용을 문자열로 반환
+        # → "title,salePrice,normalPrice\n게임A,9.99..."
+        ContentType='text/csv'    # 파일 형식 명시
+    )
+    # Key = S3 안에서의 파일 경로/이름
+    #   'deals_20260414.csv'
+    #   'data/deals_20260414.csv' 처럼 폴더 구조도 가능
+    #
+    # Body = 업로드할 실제 내용
+    #   csv_buffer.getvalue() = StringIO에 담긴 CSV 문자열 꺼내기
+    #
+    # ContentType = 파일 형식 명시
+    #   'text/csv' = CSV 파일임을 S3에 알려줌
+    #   없어도 동작하지만 명시하는 게 좋은 습관
+
+    print(f"S3 업로드 완료: s3://{bucket_name}/{file_name}")

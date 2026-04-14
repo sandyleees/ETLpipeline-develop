@@ -20,7 +20,7 @@ x-airflow-common:
                 # Airflow한테 "DB는 여기 있고, 이 설정으로 실행해" 알려주는 것
                 # Airflow가 규칙으로 정해둔 환경변수 key -- Airflow 프로그램 실행 위해 읽어야되는 내용 설정
     &airflow-common-env 
-    AIRFLOW__CORE__EXECUTOR: LocalExecutor          # 실행 방식 (단일 머신)
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor          # 실행 방식 (단일 머신) - scheduler가 task까지 실행 (worker 없음)
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: ${AIRFLOW__DATABASE__SQL_ALCHEMY_CONN}
     # DB 연결 주소 (아이디:비밀번호@DB컨테이너이름/DB이름)
     # ${} → .env 파일에서 값을 읽어옴 ----------------- ★ 민감정보 
@@ -34,6 +34,11 @@ x-airflow-common:
     AIRFLOW__CORE__FERNET_KEY: '' # 스케줄러 ↔ API 서버 간 통신 암호화 # Connection 비밀번호 암호화 (DB 저장 시)
     AIRFLOW__WEBSERVER__SECRET_KEY: 'mysecretkey1234'
     AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW__API_AUTH__JWT_SECRET}
+        # AWS 관련 환경변수 컨테이너에 추가 
+    AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+    AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+    AWS_REGION: ${AWS_REGION}
+    S3_BUCKET_NAME: ${S3_BUCKET_NAME}
 
   volumes: # 내 폴더 ↔ 컨테이너 안 폴더 연결
             # 컨테이너는 독립된 공간이라 내 파일을 못봐요
