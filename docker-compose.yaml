@@ -141,7 +141,61 @@ services: # 실제로 실행할 컨테이너들 정의 시작
       airflow-init:
         condition: service_completed_successfully
 
+  # 5. Kafka 브로커 --- /kafka 폴더 내의 docker compose yaml 내용 동일 
+  kafka:
+    image: apache/kafka:3.7.0
+    container_name: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: true
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+
+    # 6. Kafka Consumer (상시 실행)
+  kafka-consumer:
+    build: .
+    container_name: kafka-consumer
+
+    # airflow ENTRYPOINT 덮어쓰고 python3 인자 전달하는 방식으로 우회
+    entrypoint: python3 # 이미지가 airflow 이미지라서 ENTRYPOINT가 airflow로 고정되어 있어서 
+    # airflow python3 /opt/airflow/tasks/kafka_consumer.py 이런식으로 실행할 수 없으므로
+    #  ↑ ENTRYPOINT가 자동으로 앞에 붙음 → airflow는 python3를 모르는 명령어라서 에러
+    # command를 airflow의 ENTRYPOINT를 우회하는 방식으로 변경
+    command: /opt/airflow/tasks/kafka_consumer.py
+    # Airflow 이미지와 동일한 Dockerfile 사용 - kafka-python, psycopg2 라이브러리 필요해서 (airflow 기능은 필요없지만)
+    # tasks/ 폴더는 볼륨으로 마운트되어 있으므로 /opt/airflow/tasks/ 에서 읽힘
+    
+    environment:
+      DB_HOST: postgres       # postgres 컨테이너 이름 = 내부 DNS 주소
+      DB_NAME: steam_db       # ETL 결과 저장용 DB - 이미 위에 postgres 컨테이너 띄우면서 자동으로 만들어짐 
+      DB_USER: postgresql
+      DB_PASSWORD: postgresql
+      PYTHONUNBUFFERED: "1"  # 파이썬 print() 출력 버퍼링 비활성화 → 즉시 출력
+      # 이거 없으면 print()내용이 버퍼 탈출 못해서 docker compose logs에 안 찍힘
+      # -> 버퍼 탈출 못하는 이유는 print() 버퍼에 일정량 차지 않았고, consumer.py 끝나지도 않는 무한루프라서
+    volumes:
+      - ./tasks:/opt/airflow/tasks  # tasks/ 폴더 마운트 (consumer.py 포함)
+          # 이 bind mount 없으면 kafka_consumer.py 못 찾음
+          # airflow 컨테이너들도 x-airflow-common에 bind mount 있어서 tasks/ 볼 수 있는 것 
+    depends_on:
+      - kafka
+      - postgres
+    restart: on-failure
+    # kafka 준비 전에 뜨면 연결 실패 → 자동 재시작
+
 volumes:   # DB 데이터 영구 저장용 공간 선언
            # 컨테이너를 껐다 켜도 DB 데이터가 유지됨 - 별도 저장 공간에 보관
            # 컨테이너는 꺼지면 내부 데이터가 사라져요. Volume에 저장하면 유지돼요.
   postgres_data:                     # DB 데이터 영구 저장용 볼륨 이름 
+
+  kafka_data:    # ← 5. kafka 브로커 --- /kafka 폴더 내의 docker compose yaml 내용 동일 

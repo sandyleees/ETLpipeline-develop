@@ -1,0 +1,157 @@
+# version: '3.8'
+# Docker Compose 파일 형식의 버전
+# 3.8은 현재 가장 널리 쓰이는 안정적인 버전
+
+services:
+# 실행할 컨테이너들을 정의하는 섹션
+# 우리는 kafka 하나만 띄울 거라 항목이 하나
+  kafka:  # 서비스 이름 (docker compose ps 할 때 이 이름으로 표시됨)
+    # apache/kafka는 Apache 재단에서 직접 관리하는 공식 이미지
+    image: apache/kafka:3.7.0
+
+    container_name: kafka
+     # 컨테이너의 실제 이름을 지정
+      # 지정 안 하면 Docker가 랜덤으로 이름 붙임 (ex. kafka_kafka_1)
+      # 이 이름으로 docker exec -it kafka bash 같은 명령어 사용 가능
+    
+    # WSL에서 직접 접속할 일 없이 producer, consumer 모두 컨테이너로 올라가서
+    # docker 네트워크 안에서 통신하므로 외부 포트 열 필요 없어서 제거 
+    #ports: -----★ 주석코드
+      # 호스트(WSL)의 9092 포트 → 컨테이너 9092 포트로 연결
+      # → Docker(컨테이너)가 담당하는 설정
+      # - "9092:9092" ---- ★ 주석코드
+      # 포트 연결 설정: "호스트포트:컨테이너포트"
+    # 왼쪽 9092 = WSL(내 컴퓨터)에서 접근하는 포트
+    # 오른쪽 9092 = 컨테이너 내부 Kafka가 사용하는 포트
+    # 즉 내 Python 코드가 localhost:9092 로 접근하면
+    # Docker가 컨테이너 안 9092로 연결해줌
+
+    environment:
+    # 컨테이너 안에서 사용할 환경변수 설정
+    # Kafka의 동작 방식을 여기서 결정함
+
+      # KRaft 모드 설정 (Zookeeper 없이 단독 실행)
+      KAFKA_NODE_ID: 1
+      # 이 Kafka 서버의 고유 ID
+      # 여러 대의 Kafka 서버(클러스터)를 운영할 때 서로 구분하는 번호
+      # 지금은 서버가 1대뿐이라 그냥 1로 설정
+      KAFKA_PROCESS_ROLES: broker,controller
+      # 이 Kafka가 맡을 역할 (KRaft 모드의 핵심 설정)
+      # broker   = 실제 데이터(메시지)를 저장하고 전달하는 역할
+      # controller = 클러스터 상태를 관리하는 역할 (옛날엔 Zookeeper가 담당)
+      # 둘 다 이 하나의 컨테이너가 동시에 담당 → Zookeeper 불필요
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      # controller 역할을 하는 서버 목록
+      # 형식: "노드ID @ 호스트명 : 포트"
+      # 1 = 위에서 설정한 NODE_ID
+        # localhost = Controller가 자기 자신한테 통신할 때 localhost로 찾아야 함
+        # 브로커 1대 = Controller가 자기 자신 관리 = localhost가 맞음
+        # => producer, consumer.py도 모두 컨테이너로 올리는 방향으로 변경하며
+        # 같은 도커 네트워크 안에 있는 producer, consumer 컨테이너는 kafka라는 이름으로 브로커 찾을 수 있게 됨 
+      # 9093 = controller 전용 내부 포트 (외부에 노출 안 함)
+
+      # 리스너 설정 -- PLAINTEXT는 리스너의 이름인 동시에 보안 방식
+      # 여기서 정의한 이름(PLAINTEXT, CONTROLLER)이 아래에 나오는 다른 환경변수들에서 참조됨
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+       # Kafka 프로세스가 컨테이너 안에서 9092 포트로 귀를 여는 설정 (kafka 프로세스 자체의 문을 열고 리스너 이름 설정)
+       # → Kafka 프로세스가 담당하는 설정 #   컨테이너 안에서 Kafka 프로세스가 포트를 열겠다는 선언
+       # 리스너 이름은 내가 정의하는 것 - 여기서 정의하면 아래에서 계속 참조함
+      # PLAINTEXT(리스너 이름)://:9092  = 외부(Producer/Consumer)와 통신하는 포트
+      # CONTROLLER(리스너 이름)://:9093 = controller 전용 내부 통신 포트
+      # 구조> 이름 :// 호스트(비워두면 모든 IP 연결 받음) : 포트
+      # -> 풀로 쓰면 PLAINTEXT://0.0.0.0:9092
+      
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      #                            ^^^^^^^^^
+      #                            위에서 정의한 이름 참조
+      # broker가 클라이언트에게 나는 kafka:9092에 있다고 광고 -> 같은 docker 네트워크 안에 있는
+      # producer, consumer 컨테이너는 kafka라는 이름으로 브로커 찾을 수 있음
+      # Kafka 프로세스 설정 --------------kafka -> localhost일 때 주석 ----------------- 
+      # 컨테이너 내부에 있는 kafka 프로세스 안에 있는 broker 역할이 PLAINTEXT 리스너에게 내 주소는 여기야! 라고 광고
+      # -> 多 클라이언트(=리스너) 목표는 컨테이너 내부에 있는 kafka->브로커에 접속하는 것이므로 여기서 브로커가 광고하는 주소로 접속시도
+      # -> 위에서 이미 kafka 프로세스 자체는 어디 클라이언트에서 오든 (0.0.0.0) 9092 포트 타면 프로세스 들어올 수 있도록 함
+      # -> 각 클라이언트의 localhost에서 9092포트 타고 접속 시도 (서울이든 부산이든 9092 포트타면 kafka의 브로커 프로세스로 접속 가능)
+      # (각각의 클라이언트 환경에 producer.py, consumer.py가 있다)
+       # Producer/Consumer에게 "나한테 연결하려면 이 주소로 와" 라고 알려주는 주소
+       # producer.py, consumer.py는 이 주소로 접속함
+      # localhost:9092 → 내 컴퓨터에서 실행하는 Python 코드가 이 주소로 접속
+      # ※ 나중에 EC2에 올릴 때는 localhost → EC2 공인 IP로 바꿔야 함
+      # -> 각 클라이언트는 "kafka의 broker 프로세서가 EC2공인ip:9092로 오라고 하는군!" 하고 EC2 서버의 9092 포트로 접속 시도 
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+      # 각 포트에 어떤 보안 방식을 쓸지 매핑
+      # PLAINTEXT(리스너 이름):PLAINTEXT(KAFKA가 정한 보안방식)  = 암호화 없이 평문으로 통신 (개발용으로 충분)
+      # CONTROLLER(리스너 이름):PLAINTEXT(보안방식) = controller도 평문 통신
+      # 실제 운영 환경에서는 SSL로 바꾸지만 지금은 필요 없음
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # controller 통신에 사용할 리스너 이름 지정 
+      # 위에서 정의한 CONTROLLER 리스너를 쓰겠다는 의미 (이름 참조)
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      # 브로커끼리 서로 통신할 때 어떤 리스너를 쓸지 지정 (이름 참조)
+      # 우리는 브로커가 1개뿐이라 실제로 브로커끼리 통신은 없지만
+      # 공식 이미지는 이 설정이 없으면 실행 자체를 거부해서 필수로 넣어야 함
+
+      # 토픽 자동 생성 허용
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: true
+      # Producer가 존재하지 않는 토픽에 메시지를 보내면
+      # 자동으로 토픽을 생성해주는 옵션
+      # true = 자동 생성 허용 (개발 편의용)
+      # 운영 환경에서는 false로 해서 실수로 토픽 생기는 걸 방지함
+
+      # 단일 브로커용 설정 (복제본 1개)
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      # Consumer가 offset(읽은 위치)을 저장하는 내부 토픽의 복제본 개수
+      # 원래 운영 환경에서는 3 (서버 3대에 복사본 유지)
+      # 우리는 서버가 1대뿐이라 1로 설정(= 복제 안함), 안 하면 에러 남
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      # 트랜잭션 관련 내부 토픽의 복제본 개수 설정
+      # 마찬가지로 단일 브로커라 1로 설정
+      # MIN_ISR = 최소 동기화 복제본 수 (1이면 나 혼자라도 OK)
+
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+      # Docker 볼륨 설정 # WSL 파일시스템에서 직접 보이지 않음
+    # kafka_data        = 아래 volumes 섹션에서 정의한 볼륨 이름
+    # /var/lib/kafka/data    = 컨테이너 안에서 Kafka 데이터가 저장되는 경로
+      # 컨테이너가 재시작되거나 삭제돼도 kafka_data 볼륨은 살아있어서
+      # 토픽, 메시지 데이터가 사라지지 않음
+        # [바인드 마운트와 차이]
+  # 바인드 마운트 (Airflow dags): ./dags:/opt/airflow/dags
+  #   → WSL 실제 폴더와 직접 연결, WSL에서 파일 직접 편집 가능
+  # Docker 볼륨 (지금 이것): kafka_data:/var/lib/kafka/data
+  #   → Docker가 내부적으로 관리, WSL에서 직접 접근 안 됨
+  #   → Kafka 데이터는 직접 편집할 일 없으니 Docker 볼륨으로 충분
+
+  producer:
+    build: . # 현재 폴더(kafka/)의 Dockerfile로 이미지 빌드
+    container_name: kafka-producer
+    depends_on:
+      - kafka  # kafka 컨테이너가 먼저 실행된 후에 시작
+      - consumer  # consumer 뜬 다음에 producer 시작
+    command: python producer.py # 컨테이너 시작 시 실행할 명령어
+    restart: on-failure
+    # 에러로 종료되면 자동 재시작
+    # depends_on으로 Kafka 컨테이너는 시작됐어도 kafka 프로세스 완전히 준비됐는지까지는
+    # depends_on이 체크하지 않으므로 kafka 프로세스 준비 전에 실행돼서 실패해도 준비될 때까지 재시도
+    # environment:
+    # - PYTHONUNBUFFERED=1  # 출력 버퍼링 비활성화 → 즉시 출력
+
+
+  consumer:
+    build: .
+    container_name: kafka-consumer
+    depends_on:
+      - kafka
+    command: python consumer.py
+    restart: on-failure
+    # 마찬가지로 Kafka 프로세스 준비될 때까지 재시도
+    environment:
+    - PYTHONUNBUFFERED=1  # 파이썬 print() 출력 버퍼링 비활성화 → 즉시 출력
+
+
+
+volumes:
+  kafka_data:
+  # 위 volumes 설정에서 쓴 kafka_data 볼륨을 실제로 생성하는 선언
+  # Docker가 내부적으로 이 볼륨을 관리해줌 # WSL 파일시스템에서 직접 보이지 않음
+  # 실제 저장 위치: Docker 내부 /var/lib/docker/volumes/kafka_kafka_data/_data

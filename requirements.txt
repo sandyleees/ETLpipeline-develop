@@ -2,3 +2,4 @@ requests
 pandas
 psycopg2-binary
 boto3
+kafka-python==2.3.1

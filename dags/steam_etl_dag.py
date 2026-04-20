@@ -16,7 +16,7 @@ default_args = {
     'owner': 'sandy',               # DAG 소유자 이름 - Airflow UI에서 표시됨
                                     # 여러 사람이 쓸 때 누가 만든 DAG인지 구분용
     'retries': 1,               # Task 실패시 재시도 횟수 # 1 = 한 번 더 시도
-    'retry_delay': timedelta(minutes=5)  # 재시도 간격 # 실패하면 5분 기다렸다가 재시도
+    'retry_delay': timedelta(minutes=1)  # 재시도 간격 # 실패하면 1분 기다렸다가 재시도
 }
 
 # 크게 3부분으로 구성돼요 (DAG : 파이프라인 순서를 Airflow에 알려주는 파일)
