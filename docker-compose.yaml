@@ -183,6 +183,12 @@ services: # 실제로 실행할 컨테이너들 정의 시작
       PYTHONUNBUFFERED: "1"  # 파이썬 print() 출력 버퍼링 비활성화 → 즉시 출력
       # 이거 없으면 print()내용이 버퍼 탈출 못해서 docker compose logs에 안 찍힘
       # -> 버퍼 탈출 못하는 이유는 print() 버퍼에 일정량 차지 않았고, consumer.py 끝나지도 않는 무한루프라서
+
+      # AWS S3 데이터 저장 위한 AWS 환경변수 추가 
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
+      AWS_REGION: ${AWS_REGION}
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME}
     volumes:
       - ./tasks:/opt/airflow/tasks  # tasks/ 폴더 마운트 (consumer.py 포함)
           # 이 bind mount 없으면 kafka_consumer.py 못 찾음
